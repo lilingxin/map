@@ -59,6 +59,16 @@ static int setnoblocking(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+static int setappendonly(int fd) 
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        error(EXIT_FAILURE, errno, "fcntl F_GETFL error!");
+    }
+
+    return fcntl(fd, F_SETFL, flags | O_APPEND);
+}
+
 static int open_file(const char* fname)
 {
     int fd = 0;
@@ -111,6 +121,8 @@ void init_data(struct map* m)
 {
     m->child_num = 0;
     safe_malloc(m->child, *(m->child), m->mapper);
+    setappendonly(STDOUT_FILENO);
+    setvbuf(stdout, NULL, _IONBF, 0);
 }
 
 void free_data(struct map* m)
@@ -218,25 +230,27 @@ void lines_split_for_write(struct event* ev, int rfd)
         if (num == -1) break;
         if (num == 0) continue;
         for (int i = 0; i < num; ) {
-            if (is_need_read) {
-                nread = cread(rfd, buffer, MAX_BUF_SIZE);
-                bp = bout = buffer;
-                eob = buffer + nread;
-                *eob = '\n';
-            }
-             
-            bp = memchr(bp, '\n', eob - bp + 1);
-            is_need_read = (bp == eob);
-            if (bp != eob) {
-                write_fired_fd(ev->fired[i++].fd, bout, ++bp - bout, ev, &num);
-                bout = bp;
-                continue;
-            }
+            if (ev->fired[i].mask | EPOLLOUT) {
+                if (is_need_read) {
+                    nread = cread(rfd, buffer, MAX_BUF_SIZE);
+                    bp = bout = buffer;
+                    eob = buffer + nread;
+                    *eob = '\n';
+                }
+                 
+                bp = memchr(bp, '\n', eob - bp + 1);
+                is_need_read = (bp == eob);
+                if (bp != eob) {
+                    write_fired_fd(ev->fired[i++].fd, bout, ++bp - bout, ev, &num);
+                    bout = bp;
+                    continue;
+                }
 
-            if (eob != bout) 
-                write_fired_fd(ev->fired[i].fd, bout, eob - bout, ev, &num);
-            if (nread != MAX_BUF_SIZE) {
-                goto exit;
+                if (eob != bout) 
+                    write_fired_fd(ev->fired[i].fd, bout, eob - bout, ev, &num);
+                if (nread != MAX_BUF_SIZE) {
+                    goto exit;
+                }
             }
         }
     }
@@ -250,6 +264,7 @@ void close_all(struct map* m)
     for (int i = 0; i < m->child_num; ++i) 
     {
         close(m->child[i].pipe);
+        event_del(&g_ev, m->child[i].pipe);
         m->child[i].pipe = -1;
     }
 }
