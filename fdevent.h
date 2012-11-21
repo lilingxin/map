@@ -14,9 +14,9 @@ struct event {
         struct epoll_event* e;
     } ees;
     struct {
-        int num;
-        int* fds;
-    } fired;
+        int mask;
+        int fd;
+    } *fired;
 };
 
 int event_init(struct event* ev, int max_fd_num);

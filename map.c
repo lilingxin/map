@@ -40,7 +40,7 @@ static struct map g_map = {
 static struct event g_ev = {
     .epfd = -1,
     .ees = {0, NULL},
-    .fired = {0, NULL}
+    .fired = NULL
 };
 
 static char* last_component(const char* in) 
@@ -186,12 +186,12 @@ int init_event(struct event* ev, struct map* m)
     }
 }
 
-static int remove_fired_fd(struct event* ev, int fd) 
+static int remove_fired_fd(struct event* ev, int* num, int fd) 
 {
-    for (int i = 0; i < ev->fired.num; ++i) {
-        if (fd == ev->fired.fds[i]) {
-            ev->fired.fds[i] = ev->fired.fds[--ev->fired.num];
-            return ev->fired.fds[i];
+    for (int i = 0; i < *num; ++i) {
+        if (fd == ev->fired[i].fd) {
+            ev->fired[i] = ev->fired[--(*num)];
+            return ev->fired[i].fd;
         }
     } 
 
@@ -199,45 +199,43 @@ static int remove_fired_fd(struct event* ev, int fd)
     return -1;
 }
 
-static void write_fired_fd(int fd, char* buf, size_t size, struct event* ev)
+static void write_fired_fd(int fd, char* buf, size_t size, struct event* ev, int* fired_num)
 {
     if (cwrite(fd, buf, size) < size) {
-        int tfd = remove_fired_fd(ev, fd);
-        return write_fired_fd(tfd, buf, size, ev);
+        int tfd = remove_fired_fd(ev, fired_num, fd);
+        return write_fired_fd(tfd, buf, size, ev, fired_num);
     }
 }
 
 void lines_split_for_write(struct event* ev, int rfd)
 {
     bool is_need_read = true;
-    int nread, bufsize = 0;
+    int nread = 0;
     char* buffer = (char*)malloc(MAX_BUF_SIZE + 1); 
-    char* ptr = buffer;
     char* bp, *bout, *eob;
     while (true) {
         int num = event_poll(ev, 1000);
         if (num == -1) break;
         if (num == 0) continue;
-        for (int i = 0; i < ev->fired.num; ) {
+        for (int i = 0; i < num; ) {
             if (is_need_read) {
-                bufsize = buffer - ptr + MAX_BUF_SIZE;
-                nread = cread(rfd, ptr, bufsize);
-                bp = bout = ptr;
-                eob = ptr + nread;
+                nread = cread(rfd, buffer, MAX_BUF_SIZE);
+                bp = bout = buffer;
+                eob = buffer + nread;
                 *eob = '\n';
             }
              
             bp = memchr(bp, '\n', eob - bp + 1);
             is_need_read = (bp == eob);
             if (bp != eob) {
-                write_fired_fd(ev->fired.fds[i++], bout, ++bp - bout, ev);
+                write_fired_fd(ev->fired[i++].fd, bout, ++bp - bout, ev, &num);
                 bout = bp;
                 continue;
             }
-    
-            ptr = (eob == bout ? buffer : buffer + (eob - bout));
-            memmove(buffer, bout, eob - bout);
-            if (nread != bufsize) {
+
+            if (eob != bout) 
+                write_fired_fd(ev->fired[i].fd, bout, eob - bout, ev, &num);
+            if (nread != MAX_BUF_SIZE) {
                 goto exit;
             }
         }
